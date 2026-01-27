@@ -1,0 +1,25 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Config with secrets
+src/config.h
+
+# Build artifacts
+*.o
+*.a
+*.bin
+*.elf
+
+# macOS
+.DS_Store
+
+# Temp
+*.log
+*.tmp

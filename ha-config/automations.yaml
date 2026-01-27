@@ -1,0 +1,116 @@
+# PosturePilot Automations
+# Add these to your automations.yaml
+
+# ============================================
+# Level 1: Gentle Reminder
+# ============================================
+- id: posture_level_1
+  alias: "PosturePilot - Gentle Reminder"
+  trigger:
+    - platform: state
+      entity_id: sensor.posture_level
+      to: "1"
+  action:
+    - service: notify.mobile_app_your_phone  # Change to your device
+      data:
+        title: "🪑 Posture Check"
+        message: "Hey! Quick posture check - sit up straight!"
+        data:
+          ttl: 0
+          priority: high
+
+# ============================================
+# Level 2: Getting Serious  
+# ============================================
+- id: posture_level_2
+  alias: "PosturePilot - Getting Serious"
+  trigger:
+    - platform: state
+      entity_id: sensor.posture_level
+      to: "2"
+  action:
+    - service: notify.mobile_app_your_phone
+      data:
+        title: "😐 Posture Alert"
+        message: "Seriously, you've been slouching for 2 minutes. Sit up!"
+        data:
+          ttl: 0
+          priority: high
+    # Optional: Flash a smart light
+    - service: light.turn_on
+      target:
+        entity_id: light.desk_lamp  # Change to your light
+      data:
+        flash: short
+
+# ============================================
+# Level 3: Passive-Aggressive
+# ============================================
+- id: posture_level_3
+  alias: "PosturePilot - Passive Aggressive"
+  trigger:
+    - platform: state
+      entity_id: sensor.posture_level
+      to: "3"
+  action:
+    - service: notify.mobile_app_your_phone
+      data:
+        title: "😠 Your Spine Hates You"
+        message: "Your spine called. It's filing for divorce. 5 MINUTES of slouching!"
+        data:
+          ttl: 0
+          priority: high
+    # Flash lights more aggressively
+    - service: light.turn_on
+      target:
+        entity_id: light.desk_lamp
+      data:
+        flash: long
+        color_name: red
+
+# ============================================
+# Level 4: AIRHORN MODE 🔊
+# ============================================
+- id: posture_level_4
+  alias: "PosturePilot - AIRHORN"
+  trigger:
+    - platform: state
+      entity_id: sensor.posture_level
+      to: "4"
+  action:
+    # Play airhorn sound on speaker
+    - service: media_player.play_media
+      target:
+        entity_id: media_player.office_speaker  # Change to your speaker
+      data:
+        media_content_id: "media-source://media_source/local/airhorn.mp3"
+        media_content_type: audio/mpeg
+    # Flash ALL the lights
+    - service: light.turn_on
+      target:
+        entity_id: all
+      data:
+        flash: long
+        color_name: red
+    # Persistent notification
+    - service: persistent_notification.create
+      data:
+        title: "🚨 POSTURE EMERGENCY"
+        message: "10 MINUTES OF SLOUCHING! FIX YOUR POSTURE NOW!"
+
+# ============================================
+# Good Posture Streak Celebration
+# ============================================
+- id: posture_streak_milestone
+  alias: "PosturePilot - Streak Celebration"
+  trigger:
+    - platform: state
+      entity_id: sensor.posture_streak
+  condition:
+    - condition: template
+      value_template: "{{ trigger.to_state.state | int > 0 and trigger.to_state.state | int != trigger.from_state.state | int }}"
+  action:
+    - service: notify.mobile_app_your_phone
+      data:
+        title: "🏆 Posture Streak!"
+        message: "{{ states('sensor.posture_streak') }} hours of good posture! Keep it up!"

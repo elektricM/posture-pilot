@@ -1,0 +1,22 @@
+# Home Assistant Configuration for PosturePilot
+# Add this to your configuration.yaml
+
+mqtt:
+  sensor:
+    - name: "Posture Status"
+      state_topic: "posture-pilot/status"
+      icon: mdi:human-handsup
+      
+    - name: "Posture Level"
+      state_topic: "posture-pilot/level"
+      icon: mdi:alert-circle
+      
+    - name: "Posture Angle"
+      state_topic: "posture-pilot/angle"
+      unit_of_measurement: "°"
+      icon: mdi:angle-acute
+      
+    - name: "Posture Streak"
+      state_topic: "posture-pilot/streak"
+      unit_of_measurement: "hours"
+      icon: mdi:trophy

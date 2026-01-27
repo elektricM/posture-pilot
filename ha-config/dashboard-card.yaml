@@ -1,0 +1,65 @@
+# PosturePilot Dashboard Card for Home Assistant
+# Copy this into your dashboard YAML or use the UI editor
+
+# Option 1: Simple Entities Card
+type: entities
+title: 🪑 PosturePilot
+show_header_toggle: false
+entities:
+  - entity: sensor.posture_status
+    name: Status
+    icon: mdi:human-handsup
+  - entity: sensor.posture_level
+    name: Alert Level
+    icon: mdi:alert-circle
+  - entity: sensor.posture_streak
+    name: Good Posture Streak
+    icon: mdi:trophy
+  - type: divider
+  - entity: button.recalibrate_posture
+    name: Recalibrate
+    icon: mdi:refresh
+
+---
+
+# Option 2: Fancy Mushroom Card (requires HACS + Mushroom)
+type: custom:mushroom-chips-card
+chips:
+  - type: entity
+    entity: sensor.posture_status
+    icon_color: |-
+      {% if states('sensor.posture_status') == 'good' %}
+        green
+      {% else %}
+        red
+      {% endif %}
+  - type: entity
+    entity: sensor.posture_streak
+    icon: mdi:trophy
+    icon_color: amber
+
+---
+
+# Option 3: Conditional Card (shows warning when slouching)
+type: conditional
+conditions:
+  - entity: sensor.posture_status
+    state: slouching
+card:
+  type: markdown
+  content: |
+    ## ⚠️ Posture Alert!
+    
+    You've been slouching for **{{ states('sensor.posture_level') }}** escalation levels.
+    
+    Sit up straight! 🪑
+
+---
+
+# Option 4: History Graph
+type: history-graph
+title: Posture History
+hours_to_show: 24
+entities:
+  - entity: sensor.posture_status
+  - entity: sensor.posture_level
