@@ -4,10 +4,24 @@
 
 #include <TFLiteMicro_ArduinoESP32S3.h>
 
+// Resolver: register the ops our model uses
+// Adjust this list after training if the model uses different ops
+static tflite::MicroMutableOpResolver<8> getResolver() {
+    tflite::MicroMutableOpResolver<8> resolver;
+    resolver.AddConv2D();
+    resolver.AddMaxPool2D();
+    resolver.AddReshape();
+    resolver.AddFullyConnected();
+    resolver.AddSoftmax();
+    resolver.AddRelu();
+    resolver.AddMean();        // GlobalAveragePooling2D
+    resolver.AddQuantize();
+    return resolver;
+}
+
 bool inferenceSetup() {
-    // Set up model using the library's helper
-    // It handles arena allocation, interpreter creation, etc.
-    TFLMinterpreter = TFLMsetupModel(posture_model, TFLMgetResolver);
+    TFLMinterpreter = TFLMsetupModel<8, TENSOR_ARENA_SIZE>(
+        posture_model, getResolver, true);
 
     if (!TFLMinterpreter) {
         Serial.println("Failed to set up TFLite model");
