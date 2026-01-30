@@ -112,8 +112,8 @@ bool setupCamera() {
     if (currentMode == MODE_COLLECT) {
         // JPEG for web serving — lower number = better quality
         config.pixel_format = PIXFORMAT_JPEG;
-        config.jpeg_quality = 8;
-        config.fb_count = 2;
+        config.jpeg_quality = 10;
+        config.fb_count = 4;  // More buffers = smoother stream, no partial frames
     } else {
         // Grayscale for inference
         config.pixel_format = PIXFORMAT_GRAYSCALE;

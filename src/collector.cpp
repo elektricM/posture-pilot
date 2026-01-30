@@ -1,13 +1,20 @@
 #include "collector.h"
 #include "config.h"
 #include "esp_camera.h"
+#include "esp_http_server.h"
 #include <WiFi.h>
-#include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 
-static AsyncWebServer server(WEB_SERVER_PORT);
 static int collectedGood = 0;
 static int collectedBad = 0;
+static httpd_handle_t stream_httpd = NULL;
+static httpd_handle_t camera_httpd = NULL;
+
+// MJPEG stream boundary
+#define PART_BOUNDARY "123456789000000000000987654321"
+static const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
+static const char *STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
+static const char *STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
 // HTML for data collection web UI
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
@@ -24,19 +31,16 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   button { font-size: 1.2em; padding: 15px 40px; margin: 10px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
   .good { background: #0f3460; color: #eee; }
   .good:hover { background: #16498a; }
-  .good:active { background: #1a5cb0; }
   .bad { background: #e94560; color: #fff; }
   .bad:hover { background: #f05a74; }
-  .bad:active { background: #ff6b86; }
   .stats { margin: 20px; padding: 15px; background: #16213e; border-radius: 8px; display: inline-block; }
   .stats span { font-size: 1.5em; font-weight: bold; margin: 0 15px; }
   #status { margin: 10px; color: #aaa; }
-  kbd { background: #333; padding: 2px 6px; border-radius: 3px; }
 </style>
 </head>
 <body>
 <h1>PosturePilot Data Collection</h1>
-<img class="stream" id="cam" alt="Camera Stream">
+<img class="stream" id="cam" src="">
 <div class="controls">
   <button class="good" onclick="collect('good')">Good Posture (G)</button>
   <button class="bad" onclick="collect('bad')">Bad Posture (B)</button>
@@ -46,6 +50,11 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 </div>
 <div id="status">Ready. Use buttons or press G/B keys.</div>
 <script>
+// Start MJPEG stream on port 81
+var cam = document.getElementById('cam');
+var host = window.location.hostname;
+cam.src = 'http://' + host + ':81/stream';
+
 function collect(label) {
   document.getElementById('status').innerText = 'Capturing ' + label + '...';
   fetch('/collect?label=' + label)
@@ -61,15 +70,6 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'g' || e.key === 'G') collect('good');
   if (e.key === 'b' || e.key === 'B') collect('bad');
 });
-// Auto-refresh camera feed
-var cam = document.getElementById('cam');
-function refreshCam() {
-  cam.src = '/capture?' + Date.now();
-}
-cam.onload = function() { setTimeout(refreshCam, 100); };
-cam.onerror = function() { setTimeout(refreshCam, 1000); };
-refreshCam();
-// Poll status on load
 fetch('/status').then(r => r.json()).then(d => {
   document.getElementById('good').innerText = d.good;
   document.getElementById('bad').innerText = d.bad;
@@ -79,182 +79,164 @@ fetch('/status').then(r => r.json()).then(d => {
 </html>
 )rawliteral";
 
-// MJPEG stream handler
-static void handleStream(AsyncWebServerRequest* request) {
-    // AsyncWebServer doesn't natively support chunked MJPEG well,
-    // so we use a custom AsyncWebServerResponse with a callback.
-    // For simplicity, serve a single JPEG frame per request.
-    // The web UI uses <img src="/stream"> which auto-refreshes.
-    // For real MJPEG streaming, we use a WiFiClient approach below.
+// ============================================
+// MJPEG Stream handler (runs on port 81)
+// Uses esp_http_server for proper chunked streaming
+// Based on Espressif's official CameraWebServer example
+// ============================================
+static esp_err_t stream_handler(httpd_req_t *req) {
+    camera_fb_t *fb = NULL;
+    esp_err_t res = ESP_OK;
+    size_t _jpg_buf_len = 0;
+    uint8_t *_jpg_buf = NULL;
+    char part_buf[64];
 
-    // Redirect to /capture for single-frame approach
-    // Real MJPEG streaming is handled in collectorLoop() via raw sockets
-    request->redirect("/capture");
-}
+    res = httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
+    if (res != ESP_OK) return res;
 
-// Capture and serve single JPEG frame
-static void handleCapture(AsyncWebServerRequest* request) {
-    // Discard first frame (may be stale/partial — causes bottom glitch)
-    camera_fb_t* old = esp_camera_fb_get();
-    if (old) esp_camera_fb_return(old);
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) {
-        request->send(500, "text/plain", "Camera capture failed");
-        return;
+    while (true) {
+        fb = esp_camera_fb_get();
+        if (!fb) {
+            Serial.println("Stream: capture failed");
+            res = ESP_FAIL;
+            break;
+        }
+
+        if (fb->format != PIXFORMAT_JPEG) {
+            bool ok = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
+            esp_camera_fb_return(fb);
+            fb = NULL;
+            if (!ok) {
+                Serial.println("Stream: JPEG convert failed");
+                res = ESP_FAIL;
+                break;
+            }
+        } else {
+            _jpg_buf_len = fb->len;
+            _jpg_buf = fb->buf;
+        }
+
+        if (res == ESP_OK) {
+            res = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
+        }
+        if (res == ESP_OK) {
+            size_t hlen = snprintf(part_buf, 64, STREAM_PART, _jpg_buf_len);
+            res = httpd_resp_send_chunk(req, part_buf, hlen);
+        }
+        if (res == ESP_OK) {
+            res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
+        }
+
+        if (fb) {
+            esp_camera_fb_return(fb);
+            fb = NULL;
+            _jpg_buf = NULL;
+        } else if (_jpg_buf) {
+            free(_jpg_buf);
+            _jpg_buf = NULL;
+        }
+
+        if (res != ESP_OK) break;
+
+        delay(30);  // ~30fps cap
     }
 
-    // If frame is JPEG, send directly; otherwise convert
-    if (fb->format == PIXFORMAT_JPEG) {
-        AsyncWebServerResponse* response = request->beginResponse(
-            200, "image/jpeg", fb->buf, fb->len);
-        response->addHeader("Cache-Control", "no-cache");
-        request->send(response);
-    } else {
-        // Convert grayscale to JPEG
-        uint8_t* jpg_buf = nullptr;
-        size_t jpg_len = 0;
-        bool converted = frame2jpg(fb, 80, &jpg_buf, &jpg_len);
-        esp_camera_fb_return(fb);
-        fb = nullptr;
+    return res;
+}
 
-        if (converted && jpg_buf) {
-            AsyncWebServerResponse* response = request->beginResponse(
-                200, "image/jpeg", jpg_buf, jpg_len);
-            response->addHeader("Cache-Control", "no-cache");
-            request->send(response);
+// ============================================
+// REST API handlers (run on port 80)
+// ============================================
+
+// Serve web UI
+static esp_err_t index_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, INDEX_HTML, strlen(INDEX_HTML));
+}
+
+// Capture single JPEG
+static esp_err_t capture_handler(httpd_req_t *req) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    esp_err_t res;
+    if (fb->format == PIXFORMAT_JPEG) {
+        res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+    } else {
+        uint8_t *jpg_buf = NULL;
+        size_t jpg_len = 0;
+        bool ok = frame2jpg(fb, 90, &jpg_buf, &jpg_len);
+        esp_camera_fb_return(fb);
+        if (ok) {
+            res = httpd_resp_send(req, (const char *)jpg_buf, jpg_len);
             free(jpg_buf);
         } else {
-            request->send(500, "text/plain", "JPEG conversion failed");
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
         }
-        return;
+        return res;
     }
 
     esp_camera_fb_return(fb);
+    return res;
 }
 
-// Capture labeled image for training data
-static void handleCollect(AsyncWebServerRequest* request) {
-    if (!request->hasParam("label")) {
-        request->send(400, "application/json", "{\"error\":\"missing label param\"}");
-        return;
+// Collect labeled image
+static esp_err_t collect_handler(httpd_req_t *req) {
+    char buf[32];
+    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing query");
+        return ESP_FAIL;
     }
 
-    String label = request->getParam("label")->value();
-    if (label != "good" && label != "bad") {
-        request->send(400, "application/json", "{\"error\":\"label must be good or bad\"}");
-        return;
+    char label[8];
+    if (httpd_query_key_value(buf, "label", label, sizeof(label)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing label param");
+        return ESP_FAIL;
     }
 
-    camera_fb_t* fb = esp_camera_fb_get();
+    if (strcmp(label, "good") != 0 && strcmp(label, "bad") != 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "label must be good or bad");
+        return ESP_FAIL;
+    }
+
+    camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
-        request->send(500, "application/json", "{\"error\":\"capture failed\"}");
-        return;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
     }
+    esp_camera_fb_return(fb);
 
-    // Convert to JPEG if needed
-    uint8_t* jpg_buf = nullptr;
-    size_t jpg_len = 0;
-    bool needFree = false;
-
-    if (fb->format == PIXFORMAT_JPEG) {
-        jpg_buf = fb->buf;
-        jpg_len = fb->len;
-    } else {
-        if (frame2jpg(fb, 90, &jpg_buf, &jpg_len)) {
-            needFree = true;
-        } else {
-            esp_camera_fb_return(fb);
-            request->send(500, "application/json", "{\"error\":\"jpeg conversion failed\"}");
-            return;
-        }
-    }
-
-    // Update counters
-    if (label == "good") {
-        collectedGood++;
-    } else {
-        collectedBad++;
-    }
+    if (strcmp(label, "good") == 0) collectedGood++;
+    else collectedBad++;
     int total = collectedGood + collectedBad;
-
-    // Build filename
-    String filename = label + "_" + String(total) + ".jpg";
-
-    // Send the image as a download with metadata in response
-    // The collection workflow: browser captures -> downloads image -> user saves to labeled folder
-    // This avoids needing SD card on the ESP32
-    AsyncWebServerResponse* response = request->beginResponse(
-        200, "application/json", nullptr, 0);
 
     StaticJsonDocument<256> doc;
     doc["status"] = "captured";
     doc["label"] = label;
-    doc["filename"] = filename;
     doc["good"] = collectedGood;
     doc["bad"] = collectedBad;
     doc["total"] = total;
-    doc["size"] = jpg_len;
 
     char jsonBuf[256];
     serializeJson(doc, jsonBuf);
 
-    if (needFree) free(jpg_buf);
-    esp_camera_fb_return(fb);
-
-    request->send(200, "application/json", jsonBuf);
-
-    #if DEBUG_MODE
-    Serial.printf("Collected: %s #%d (%d bytes)\n", label.c_str(), total, (int)jpg_len);
-    #endif
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, jsonBuf, strlen(jsonBuf));
 }
 
-// Download a labeled image (capture + immediate download)
-static void handleDownload(AsyncWebServerRequest* request) {
-    if (!request->hasParam("label")) {
-        request->send(400, "text/plain", "missing label");
-        return;
-    }
-
-    String label = request->getParam("label")->value();
-
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) {
-        request->send(500, "text/plain", "capture failed");
-        return;
-    }
-
-    uint8_t* jpg_buf = nullptr;
-    size_t jpg_len = 0;
-    bool needFree = false;
-
-    if (fb->format == PIXFORMAT_JPEG) {
-        jpg_buf = fb->buf;
-        jpg_len = fb->len;
-    } else {
-        if (frame2jpg(fb, 90, &jpg_buf, &jpg_len)) {
-            needFree = true;
-        } else {
-            esp_camera_fb_return(fb);
-            request->send(500, "text/plain", "jpeg conversion failed");
-            return;
-        }
-    }
-
-    int count = (label == "good") ? ++collectedGood : ++collectedBad;
-    String filename = label + "_" + String(collectedGood + collectedBad) + ".jpg";
-
-    AsyncWebServerResponse* response = request->beginResponse(
-        200, "image/jpeg", jpg_buf, jpg_len);
-    response->addHeader("Content-Disposition", "attachment; filename=" + filename);
-    request->send(response);
-
-    if (needFree) free(jpg_buf);
-    esp_camera_fb_return(fb);
-}
-
-// Device status endpoint
-static void handleStatus(AsyncWebServerRequest* request) {
+// Device status
+static esp_err_t status_handler(httpd_req_t *req) {
     StaticJsonDocument<256> doc;
     doc["mode"] = "collect";
     doc["good"] = collectedGood;
@@ -266,30 +248,45 @@ static void handleStatus(AsyncWebServerRequest* request) {
 
     char buf[256];
     serializeJson(doc, buf);
-    request->send(200, "application/json", buf);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, buf, strlen(buf));
 }
 
 void collectorSetup() {
-    // Serve web UI
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "text/html", INDEX_HTML);
-    });
+    // Start camera HTTP server on port 80 (web UI + API)
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 80;
+    config.max_uri_handlers = 8;
 
-    // API endpoints
-    server.on("/capture", HTTP_GET, handleCapture);
-    server.on("/stream", HTTP_GET, handleStream);
-    server.on("/collect", HTTP_GET, handleCollect);
-    server.on("/download", HTTP_GET, handleDownload);
-    server.on("/status", HTTP_GET, handleStatus);
+    httpd_uri_t index_uri = { .uri = "/", .method = HTTP_GET, .handler = index_handler };
+    httpd_uri_t capture_uri = { .uri = "/capture", .method = HTTP_GET, .handler = capture_handler };
+    httpd_uri_t collect_uri = { .uri = "/collect", .method = HTTP_GET, .handler = collect_handler };
+    httpd_uri_t status_uri = { .uri = "/status", .method = HTTP_GET, .handler = status_handler };
 
-    server.begin();
-    Serial.printf("Collection server started on port %d\n", WEB_SERVER_PORT);
-    Serial.printf("Open http://%s/ in your browser\n", WiFi.localIP().toString().c_str());
+    if (httpd_start(&camera_httpd, &config) == ESP_OK) {
+        httpd_register_uri_handler(camera_httpd, &index_uri);
+        httpd_register_uri_handler(camera_httpd, &capture_uri);
+        httpd_register_uri_handler(camera_httpd, &collect_uri);
+        httpd_register_uri_handler(camera_httpd, &status_uri);
+        Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
+    }
+
+    // Start MJPEG stream server on port 81 (separate so it doesn't block API)
+    config.server_port = 81;
+    config.ctrl_port = 32769;
+
+    httpd_uri_t stream_uri = { .uri = "/stream", .method = HTTP_GET, .handler = stream_handler };
+
+    if (httpd_start(&stream_httpd, &config) == ESP_OK) {
+        httpd_register_uri_handler(stream_httpd, &stream_uri);
+        Serial.printf("Stream: http://%s:81/stream\n", WiFi.localIP().toString().c_str());
+    }
 }
 
 void collectorLoop() {
-    // AsyncWebServer handles requests asynchronously, nothing needed here
-    // Future: could add SD card batch saving, auto-download, etc.
+    // Both servers handle requests via ESP-IDF httpd tasks, nothing to do here
 }
 
 int getCollectedCount() {

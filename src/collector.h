@@ -3,16 +3,12 @@
 
 #include <Arduino.h>
 
-// Initialize the HTTP server for data collection
-// Starts AsyncWebServer with endpoints:
-//   /          - Web UI for data collection
-//   /capture   - Capture single JPEG image
-//   /stream    - MJPEG live stream
-//   /status    - JSON device status
-//   /collect   - Capture labeled image (?label=good or ?label=bad)
+// Start the data collection HTTP servers:
+//   Port 80: Web UI + REST API (/capture, /collect, /status)
+//   Port 81: MJPEG live stream (/stream)
 void collectorSetup();
 
-// Call in loop to handle streaming clients
+// Called in loop (not needed — servers run in background tasks)
 void collectorLoop();
 
 // Get count of collected images
