@@ -36,7 +36,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 </head>
 <body>
 <h1>PosturePilot Data Collection</h1>
-<img class="stream" src="/stream" alt="Camera Stream">
+<img class="stream" id="cam" alt="Camera Stream">
 <div class="controls">
   <button class="good" onclick="collect('good')">Good Posture (G)</button>
   <button class="bad" onclick="collect('bad')">Bad Posture (B)</button>
@@ -61,6 +61,14 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'g' || e.key === 'G') collect('good');
   if (e.key === 'b' || e.key === 'B') collect('bad');
 });
+// Auto-refresh camera feed
+var cam = document.getElementById('cam');
+function refreshCam() {
+  cam.src = '/capture?' + Date.now();
+}
+cam.onload = function() { setTimeout(refreshCam, 100); };
+cam.onerror = function() { setTimeout(refreshCam, 1000); };
+refreshCam();
 // Poll status on load
 fetch('/status').then(r => r.json()).then(d => {
   document.getElementById('good').innerText = d.good;
@@ -86,6 +94,10 @@ static void handleStream(AsyncWebServerRequest* request) {
 
 // Capture and serve single JPEG frame
 static void handleCapture(AsyncWebServerRequest* request) {
+    // Discard first frame (may be stale/partial — causes bottom glitch)
+    camera_fb_t* old = esp_camera_fb_get();
+    if (old) esp_camera_fb_return(old);
+
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
         request->send(500, "text/plain", "Camera capture failed");

@@ -110,9 +110,9 @@ bool setupCamera() {
     config.fb_location = CAMERA_FB_IN_PSRAM;
 
     if (currentMode == MODE_COLLECT) {
-        // JPEG for web serving
+        // JPEG for web serving — lower number = better quality
         config.pixel_format = PIXFORMAT_JPEG;
-        config.jpeg_quality = 12;
+        config.jpeg_quality = 8;
         config.fb_count = 2;
     } else {
         // Grayscale for inference
@@ -129,13 +129,14 @@ bool setupCamera() {
 
     sensor_t* s = esp_camera_sensor_get();
     if (s) {
-        s->set_brightness(s, 0);
+        s->set_brightness(s, 1);       // Bump brightness (+1)
         s->set_contrast(s, 1);
-        s->set_gainceiling(s, GAINCEILING_4X);
+        s->set_gainceiling(s, GAINCEILING_8X);  // Allow more gain in low light
         s->set_whitebal(s, 1);
         s->set_awb_gain(s, 1);
         s->set_exposure_ctrl(s, 1);
         s->set_aec2(s, 1);
+        s->set_ae_level(s, 1);         // Brighter auto-exposure target
         s->set_gain_ctrl(s, 1);
     }
 
