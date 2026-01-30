@@ -26,7 +26,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <style>
   body { font-family: sans-serif; text-align: center; background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }
   h1 { color: #e94560; }
-  .stream { width: 100%; max-width: 640px; border-radius: 8px; margin: 10px auto; display: block; }
+  .stream { width: 100%; max-width: 640px; border-radius: 8px; margin: 10px auto; display: block; transform: scaleX(-1); }
   .controls { margin: 20px 0; }
   button { font-size: 1.2em; padding: 15px 40px; margin: 10px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
   .good { background: #0f3460; color: #eee; }
