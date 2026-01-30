@@ -58,14 +58,23 @@ cam.src = 'http://' + host + ':81/stream';
 function collect(label) {
   document.getElementById('status').innerText = 'Capturing ' + label + '...';
   fetch('/collect?label=' + label)
-    .then(r => r.json())
-    .then(d => {
-      document.getElementById('good').innerText = d.good;
-      document.getElementById('bad').innerText = d.bad;
-      document.getElementById('status').innerText = 'Captured ' + label + ' (#' + d.total + ')';
+    .then(r => r.blob())
+    .then(blob => {
+      // Download the image
+      var count = label === 'good' ? ++goodCount : ++badCount;
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = label + '_' + (goodCount + badCount) + '.jpg';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      document.getElementById('good').innerText = goodCount;
+      document.getElementById('bad').innerText = badCount;
+      document.getElementById('status').innerText = 'Downloaded ' + label + ' (#' + (goodCount + badCount) + ')';
     })
     .catch(e => { document.getElementById('status').innerText = 'Error: ' + e; });
 }
+var goodCount = 0;
+var badCount = 0;
 document.addEventListener('keydown', function(e) {
   if (e.key === 'g' || e.key === 'G') collect('good');
   if (e.key === 'b' || e.key === 'B') collect('bad');
@@ -214,25 +223,44 @@ static esp_err_t collect_handler(httpd_req_t *req) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
-    esp_camera_fb_return(fb);
 
     if (strcmp(label, "good") == 0) collectedGood++;
     else collectedBad++;
     int total = collectedGood + collectedBad;
 
-    StaticJsonDocument<256> doc;
-    doc["status"] = "captured";
-    doc["label"] = label;
-    doc["good"] = collectedGood;
-    doc["bad"] = collectedBad;
-    doc["total"] = total;
+    // Build filename for download
+    char filename[64];
+    snprintf(filename, sizeof(filename), "attachment; filename=%s_%d.jpg", label, total);
 
-    char jsonBuf[256];
-    serializeJson(doc, jsonBuf);
-
-    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition", filename);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    return httpd_resp_send(req, jsonBuf, strlen(jsonBuf));
+
+    esp_err_t res;
+    if (fb->format == PIXFORMAT_JPEG) {
+        res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+    } else {
+        uint8_t *jpg_buf = NULL;
+        size_t jpg_len = 0;
+        bool ok = frame2jpg(fb, 90, &jpg_buf, &jpg_len);
+        esp_camera_fb_return(fb);
+        if (ok) {
+            res = httpd_resp_send(req, (const char *)jpg_buf, jpg_len);
+            free(jpg_buf);
+        } else {
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        return res;
+    }
+
+    esp_camera_fb_return(fb);
+
+    #if DEBUG_MODE
+    Serial.printf("Collected: %s #%d\n", label, total);
+    #endif
+
+    return res;
 }
 
 // Device status
