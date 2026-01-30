@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-PosturePilot Model Training Script
+PosturePilot Model Training
 
-Trains a binary classifier (good posture vs bad posture) and exports
-to TFLite format + C header for embedding in ESP32 firmware.
+Trains a posture classifier (good vs bad) and exports to TFLite + C header
+for the ESP32 firmware.
 
 Usage:
     python train_model.py --data ./data --output ../src/model.h
@@ -12,10 +12,6 @@ Data structure:
     data/
       good/    <- images of good posture
       bad/     <- images of bad posture
-
-The script supports two approaches:
-    1. Simple CNN (default) - small, fast, trains from scratch
-    2. Transfer learning (--transfer) - MobileNetV2 backbone, more accurate
 """
 
 import argparse
@@ -34,7 +30,6 @@ IMG_WIDTH = 96
 IMG_HEIGHT = 96
 BATCH_SIZE = 32
 EPOCHS_DEFAULT = 30
-TRANSFER_EPOCHS_DEFAULT = 15
 
 
 def load_dataset(data_dir: str, validation_split: float = 0.2):
@@ -69,47 +64,58 @@ def load_dataset(data_dir: str, validation_split: float = 0.2):
 
     class_names = train_ds.class_names
     print(f"Classes: {class_names}")
-    print(f"Training samples: {len(train_ds) * BATCH_SIZE}")
-    print(f"Validation samples: {len(val_ds) * BATCH_SIZE}")
+    print(f"Training batches: {len(train_ds)}")
+    print(f"Validation batches: {len(val_ds)}")
 
-    # Normalize pixel values to [0, 1]
-    normalization = layers.Rescaling(1.0 / 255)
-    train_ds = train_ds.map(lambda x, y: (normalization(x), y))
-    val_ds = val_ds.map(lambda x, y: (normalization(x), y))
+    # Normalize to [0, 1]
+    norm = layers.Rescaling(1.0 / 255)
+    train_ds = train_ds.map(lambda x, y: (norm(x), y))
+    val_ds = val_ds.map(lambda x, y: (norm(x), y))
 
-    # Performance optimization
     train_ds = train_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
     val_ds = val_ds.cache().prefetch(buffer_size=tf.data.AUTOTUNE)
 
     return train_ds, val_ds, class_names
 
 
-def build_simple_cnn():
-    """Build a small CNN suitable for ESP32 inference."""
+def build_model():
+    """
+    CNN for 96x96 binary classification on ESP32.
+
+    Architecture based on what works in practice for ESP32 TFLite:
+    - 5x5 first kernel to capture spatial features early
+    - 3 conv blocks with increasing filters (32 -> 64 -> 64)
+    - Dropout between blocks to prevent overfitting on small datasets
+    - GlobalAveragePooling instead of Flatten (way fewer params)
+    - INT8 quantization friendly (no fancy ops)
+    """
     model = keras.Sequential([
         layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 1)),
 
-        # Data augmentation (training only)
+        # Data augmentation (only during training)
         layers.RandomFlip("horizontal"),
         layers.RandomRotation(0.05),
-        layers.RandomZoom(0.1),
+        layers.RandomBrightness(0.1),
 
-        # Conv block 1
-        layers.Conv2D(16, 3, padding="same", activation="relu"),
-        layers.MaxPooling2D(),
+        # Block 1: 5x5 conv to capture larger spatial patterns
+        layers.Conv2D(32, (5, 5), padding="same", activation="relu"),
+        layers.MaxPooling2D((2, 2)),
+        layers.Dropout(0.2),
 
-        # Conv block 2
-        layers.Conv2D(32, 3, padding="same", activation="relu"),
-        layers.MaxPooling2D(),
+        # Block 2
+        layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
+        layers.MaxPooling2D((2, 2)),
+        layers.Dropout(0.2),
 
-        # Conv block 3
-        layers.Conv2D(64, 3, padding="same", activation="relu"),
-        layers.MaxPooling2D(),
+        # Block 3
+        layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
+        layers.MaxPooling2D((2, 2)),
+        layers.Dropout(0.2),
 
         # Classifier
         layers.GlobalAveragePooling2D(),
+        layers.Dense(128, activation="relu"),
         layers.Dropout(0.3),
-        layers.Dense(32, activation="relu"),
         layers.Dense(2, activation="softmax"),
     ])
 
@@ -122,51 +128,26 @@ def build_simple_cnn():
     return model
 
 
-def build_transfer_model():
-    """Build a MobileNetV2-based model with transfer learning."""
-    # MobileNetV2 expects 3 channels, so we repeat grayscale
-    inputs = layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 1))
+def convert_to_tflite(model, train_ds, output_path: str):
+    """Convert to fully quantized INT8 TFLite model.
 
-    # Data augmentation
-    x = layers.RandomFlip("horizontal")(inputs)
-    x = layers.RandomRotation(0.05)(x)
-    x = layers.RandomZoom(0.1)(x)
+    INT8 is much faster on ESP32 than float - no FPU needed,
+    and the model is ~4x smaller.
+    """
+    # Representative dataset for INT8 calibration
+    def representative_data():
+        for images, _ in train_ds.take(50):
+            for i in range(min(5, len(images))):
+                yield [tf.expand_dims(images[i], 0)]
 
-    # Convert grayscale to 3-channel for MobileNet
-    x = layers.Concatenate()([x, x, x])
-
-    # MobileNetV2 backbone (frozen)
-    base_model = keras.applications.MobileNetV2(
-        input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
-        include_top=False,
-        weights="imagenet",
-    )
-    base_model.trainable = False
-
-    x = base_model(x, training=False)
-    x = layers.GlobalAveragePooling2D()(x)
-    x = layers.Dropout(0.3)(x)
-    x = layers.Dense(64, activation="relu")(x)
-    outputs = layers.Dense(2, activation="softmax")(x)
-
-    model = keras.Model(inputs, outputs)
-
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=1e-3),
-        loss="categorical_crossentropy",
-        metrics=["accuracy"],
-    )
-
-    return model
-
-
-def convert_to_tflite(model, output_path: str):
-    """Convert Keras model to TFLite format."""
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
-    # Quantize for smaller model and faster inference on ESP32
+    # Full INT8 quantization
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    converter.target_spec.supported_types = [tf.float16]
+    converter.representative_dataset = representative_data
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    converter.inference_input_type = tf.int8
+    converter.inference_output_type = tf.int8
 
     tflite_model = converter.convert()
 
@@ -174,12 +155,12 @@ def convert_to_tflite(model, output_path: str):
     with open(tflite_path, "wb") as f:
         f.write(tflite_model)
 
-    print(f"TFLite model saved: {tflite_path} ({len(tflite_model)} bytes)")
+    print(f"TFLite model: {tflite_path} ({len(tflite_model)} bytes)")
     return tflite_model
 
 
 def convert_to_header(tflite_model: bytes, output_path: str):
-    """Convert TFLite model bytes to C header file."""
+    """Convert TFLite model to C header for firmware embedding."""
     hex_lines = []
     for i in range(0, len(tflite_model), 12):
         chunk = tflite_model[i:i + 12]
@@ -189,11 +170,14 @@ def convert_to_header(tflite_model: bytes, output_path: str):
     header = f"""#ifndef MODEL_H
 #define MODEL_H
 
-// Auto-generated by scripts/train_model.py
+// Generated by scripts/train_model.py
 // Model size: {len(tflite_model)} bytes
+// Quantization: INT8 (full integer)
 //
-// Input:  {IMG_WIDTH}x{IMG_HEIGHT}x1 grayscale, float32 normalized [0, 1]
-// Output: 2 floats [good_confidence, bad_confidence]
+// Input:  96x96x1 grayscale, int8 (quantized)
+// Output: 2 x int8 [bad_confidence, good_confidence]
+//
+// Class order (alphabetical): bad=0, good=1
 
 alignas(16) const unsigned char posture_model[] = {{
 {chr(10).join(hex_lines)}
@@ -207,54 +191,37 @@ const unsigned int posture_model_len = {len(tflite_model)};
     with open(output_path, "w") as f:
         f.write(header)
 
-    print(f"C header saved: {output_path}")
+    print(f"C header: {output_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train PosturePilot posture classifier")
     parser.add_argument("--data", type=str, default="./data",
-                        help="Path to training data (good/ and bad/ subdirectories)")
+                        help="Path to training data (good/ and bad/ subdirs)")
     parser.add_argument("--output", type=str, default="../src/model.h",
-                        help="Output path for C header file")
-    parser.add_argument("--transfer", action="store_true",
-                        help="Use MobileNetV2 transfer learning instead of simple CNN")
-    parser.add_argument("--epochs", type=int, default=None,
-                        help="Number of training epochs")
+                        help="Output path for C header")
+    parser.add_argument("--epochs", type=int, default=EPOCHS_DEFAULT)
     args = parser.parse_args()
 
-    # Set default epochs based on model type
-    if args.epochs is None:
-        args.epochs = TRANSFER_EPOCHS_DEFAULT if args.transfer else EPOCHS_DEFAULT
-
-    print("PosturePilot Model Training")
-    print(f"  Data:     {args.data}")
-    print(f"  Output:   {args.output}")
-    print(f"  Model:    {'MobileNetV2 transfer' if args.transfer else 'Simple CNN'}")
-    print(f"  Epochs:   {args.epochs}")
-    print(f"  Input:    {IMG_WIDTH}x{IMG_HEIGHT} grayscale")
+    print(f"PosturePilot Model Training")
+    print(f"  Data:   {args.data}")
+    print(f"  Output: {args.output}")
+    print(f"  Epochs: {args.epochs}")
+    print(f"  Input:  {IMG_WIDTH}x{IMG_HEIGHT} grayscale")
+    print(f"  Quant:  INT8 (full integer)")
     print()
 
-    # Load data
     train_ds, val_ds, class_names = load_dataset(args.data)
 
-    # Verify class order: should be [bad, good] alphabetically
-    # Output index 0 = bad, index 1 = good
-    # BUT our firmware expects: output[0] = good, output[1] = bad
-    # image_dataset_from_directory sorts alphabetically: bad=0, good=1
+    # Verify class order
     print(f"Class mapping: {dict(enumerate(class_names))}")
-    if class_names[0] == "bad" and class_names[1] == "good":
-        print("Note: Model outputs [bad, good]. Firmware will read index 1 as bad_confidence.")
-        print("      Adjust inference.cpp if class order differs.")
+    if class_names[0] != "bad" or class_names[1] != "good":
+        print("WARNING: Unexpected class order! Firmware assumes bad=0, good=1")
+        print("         Rename your folders so alphabetical order is: bad, good")
 
-    # Build model
-    if args.transfer:
-        model = build_transfer_model()
-    else:
-        model = build_simple_cnn()
-
+    model = build_model()
     model.summary()
 
-    # Train
     callbacks = [
         keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
         keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=3),
@@ -267,22 +234,17 @@ def main():
         callbacks=callbacks,
     )
 
-    # Evaluate
     val_loss, val_acc = model.evaluate(val_ds)
     print(f"\nValidation accuracy: {val_acc:.2%}")
-    print(f"Validation loss: {val_loss:.4f}")
 
     if val_acc < 0.7:
-        print("\nWarning: Low accuracy. Consider collecting more data.")
+        print("Warning: accuracy is low. Collect more data or check image quality.")
 
-    # Convert to TFLite
-    tflite_model = convert_to_tflite(model, args.output)
-
-    # Convert to C header
+    # INT8 quantization needs the training data for calibration
+    tflite_model = convert_to_tflite(model, train_ds, args.output)
     convert_to_header(tflite_model, args.output)
 
-    print("\nDone! Flash the firmware to update the model on your ESP32.")
-    print(f"Model file: {args.output}")
+    print(f"\nDone! Flash the firmware to update the model.")
 
 
 if __name__ == "__main__":
