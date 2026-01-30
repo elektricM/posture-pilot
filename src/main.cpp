@@ -110,10 +110,11 @@ bool setupCamera() {
     config.fb_location = CAMERA_FB_IN_PSRAM;
 
     if (currentMode == MODE_COLLECT) {
-        // JPEG for web serving — lower number = better quality
+        // JPEG for web serving — lower number = better quality (4-63)
         config.pixel_format = PIXFORMAT_JPEG;
-        config.jpeg_quality = 10;
-        config.fb_count = 4;  // More buffers = smoother stream, no partial frames
+        config.jpeg_quality = 6;
+        config.fb_count = 4;
+        config.frame_size = FRAMESIZE_VGA;  // 640x480 for collection
     } else {
         // Grayscale for inference
         config.pixel_format = PIXFORMAT_GRAYSCALE;
@@ -129,15 +130,24 @@ bool setupCamera() {
 
     sensor_t* s = esp_camera_sensor_get();
     if (s) {
-        s->set_brightness(s, 1);       // Bump brightness (+1)
-        s->set_contrast(s, 1);
-        s->set_gainceiling(s, GAINCEILING_8X);  // Allow more gain in low light
-        s->set_whitebal(s, 1);
-        s->set_awb_gain(s, 1);
-        s->set_exposure_ctrl(s, 1);
-        s->set_aec2(s, 1);
-        s->set_ae_level(s, 1);         // Brighter auto-exposure target
-        s->set_gain_ctrl(s, 1);
+        s->set_brightness(s, 1);         // Slightly brighter
+        s->set_contrast(s, 0);           // Default contrast
+        s->set_saturation(s, 0);         // Default saturation
+        s->set_whitebal(s, 1);           // Auto white balance on
+        s->set_awb_gain(s, 1);           // AWB gain on
+        s->set_wb_mode(s, 0);            // Auto WB mode
+        s->set_exposure_ctrl(s, 1);      // Auto exposure on
+        s->set_aec2(s, 1);              // AEC DSP on (better auto-exposure)
+        s->set_ae_level(s, 1);          // Slightly brighter exposure target
+        s->set_aec_value(s, 400);        // Longer exposure for less noise
+        s->set_gain_ctrl(s, 1);          // Auto gain on
+        s->set_agc_gain(s, 0);           // Start with low gain
+        s->set_gainceiling(s, (gainceiling_t)2);  // 4X max — less noise
+        s->set_bpc(s, 1);               // Bad pixel correction
+        s->set_wpc(s, 1);               // White pixel correction
+        s->set_raw_gma(s, 1);           // Gamma correction
+        s->set_lenc(s, 1);              // Lens correction
+        s->set_dcw(s, 1);               // Downsize enable
     }
 
     Serial.println("Camera initialized");
