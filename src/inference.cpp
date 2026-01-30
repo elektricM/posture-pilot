@@ -8,6 +8,12 @@
 static byte tensorArena[TENSOR_ARENA_SIZE];
 
 bool inferenceSetup() {
+    // Check if model data is valid (not just the placeholder 0x00)
+    if (posture_model_len <= 1) {
+        Serial.println("No trained model found - flash a model or use COLLECT mode");
+        return false;
+    }
+
     bool ok = ModelInit(posture_model, tensorArena, TENSOR_ARENA_SIZE);
 
     if (!ok) {
