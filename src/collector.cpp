@@ -94,7 +94,7 @@ static void handleCapture(AsyncWebServerRequest* request) {
 
     // If frame is JPEG, send directly; otherwise convert
     if (fb->format == PIXFORMAT_JPEG) {
-        AsyncWebServerResponse* response = request->beginResponse_P(
+        AsyncWebServerResponse* response = request->beginResponse(
             200, "image/jpeg", fb->buf, fb->len);
         response->addHeader("Cache-Control", "no-cache");
         request->send(response);
@@ -107,7 +107,7 @@ static void handleCapture(AsyncWebServerRequest* request) {
         fb = nullptr;
 
         if (converted && jpg_buf) {
-            AsyncWebServerResponse* response = request->beginResponse_P(
+            AsyncWebServerResponse* response = request->beginResponse(
                 200, "image/jpeg", jpg_buf, jpg_len);
             response->addHeader("Cache-Control", "no-cache");
             request->send(response);
@@ -172,7 +172,7 @@ static void handleCollect(AsyncWebServerRequest* request) {
     // Send the image as a download with metadata in response
     // The collection workflow: browser captures -> downloads image -> user saves to labeled folder
     // This avoids needing SD card on the ESP32
-    AsyncWebServerResponse* response = request->beginResponse_P(
+    AsyncWebServerResponse* response = request->beginResponse(
         200, "application/json", nullptr, 0);
 
     StaticJsonDocument<256> doc;
@@ -232,7 +232,7 @@ static void handleDownload(AsyncWebServerRequest* request) {
     int count = (label == "good") ? ++collectedGood : ++collectedBad;
     String filename = label + "_" + String(collectedGood + collectedBad) + ".jpg";
 
-    AsyncWebServerResponse* response = request->beginResponse_P(
+    AsyncWebServerResponse* response = request->beginResponse(
         200, "image/jpeg", jpg_buf, jpg_len);
     response->addHeader("Content-Disposition", "attachment; filename=" + filename);
     request->send(response);
@@ -260,7 +260,7 @@ static void handleStatus(AsyncWebServerRequest* request) {
 void collectorSetup() {
     // Serve web UI
     server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send_P(200, "text/html", INDEX_HTML);
+        request->send(200, "text/html", INDEX_HTML);
     });
 
     // API endpoints
