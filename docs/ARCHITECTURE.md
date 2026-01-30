@@ -1,33 +1,43 @@
 # Architecture
 
-## Overview
+## How it works
+
+Two modes: collect training data, then monitor posture.
 
 ```
-ESP32 Camera → Face Tracking → MQTT → Home Assistant → Notifications
+  COLLECT MODE                        MONITOR MODE
+  Browser ↔ ESP32 HTTP server         ESP32 Camera
+  Capture labeled images              → TFLite inference
+  (good posture / bad posture)        → MQTT → Home Assistant
+                                      → Escalation → LED
+        ↓
+  Training data (good/ bad/)
+        ↓
+  train_model.py → model.h
+        ↓
+  Flash firmware with trained model
 ```
 
-## Detection
+### Collect mode
 
-Tracks face position in frame. When you slouch:
-- Face drops lower (head tilts forward)
-- Face appears larger (leaning toward camera)
+HTTP server on the ESP32. Open the web UI, see a live camera feed, press G or B to label the current frame as good/bad posture. Need ~200+ images per class.
 
-No ML models - just comparing current face position to calibrated baseline.
+### Monitor mode
 
-## Calibration
-
-On startup, sit properly for 5 seconds. Device averages face position across 30 frames to establish "good posture" baseline.
+Runs TFLite Micro inference on each camera frame. Model takes 96x96 grayscale input, outputs good/bad confidence. No calibration step needed — the model already knows what to look for.
 
 ## Escalation
 
-Longer you ignore it, more aggressive it gets. Resets when you fix posture.
+The longer you slouch, the more annoying it gets. Fix your posture and it resets.
 
-## MQTT
+## MQTT topics
 
-Publishes to:
-- `posture-pilot/status` - good/slouching
-- `posture-pilot/level` - escalation 0-4
-- `posture-pilot/streak` - hours of good posture
+| Topic | What |
+|-------|------|
+| `posture-pilot/status` | `good` or `slouching` |
+| `posture-pilot/level` | Escalation level (0-4) |
+| `posture-pilot/streak` | Hours of good posture |
 
-Subscribes to:
-- `posture-pilot/calibrate` - send 1 to recalibrate
+## OTA
+
+ArduinoOTA for wireless updates. Hostname: `posture-pilot.local`.

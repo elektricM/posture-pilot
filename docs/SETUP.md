@@ -1,37 +1,31 @@
 # Setup Guide
 
-Detailed instructions for getting PosturePilot running.
+## What you need
 
-## Prerequisites
-
-- XIAO ESP32S3 Sense with camera attached
+- XIAO ESP32S3 Sense with camera module
 - USB-C cable
-- WiFi network (2.4GHz)
-- Home Assistant with MQTT broker
+- WiFi (2.4GHz)
+- Home Assistant with MQTT broker (for monitoring mode)
+- Python 3.8+ with pip (for model training)
 
 ## Hardware
 
-### Camera module
+### Camera
 
-The XIAO ESP32S3 Sense comes with a detachable camera. If not attached:
-
-1. Find the B2B connector on the board
-2. Align the camera board connector
-3. Press until it clicks
+The XIAO ESP32S3 Sense comes with a detachable OV2640 camera. If it's not attached, find the B2B connector and press the camera board in until it clicks.
 
 ### Mounting
 
-For best results:
-- Eye level when sitting
-- 50-80cm from your face
-- Facing you directly
-- Avoid backlighting (don't put in front of a window)
+For good results, place the camera:
+- At eye level when sitting
+- 50–80cm away, facing you
+- Avoid backlighting (don't put it in front of a window)
 
 ## Software
 
 ### Install PlatformIO
 
-Either VS Code extension (search "PlatformIO") or CLI:
+VS Code extension (search "PlatformIO") or CLI:
 
 ```bash
 pip install platformio
@@ -45,39 +39,72 @@ cd posture-pilot
 cp src/config.example.h src/config.h
 ```
 
-Edit `src/config.h`:
+Edit `src/config.h` with your network details:
 
 ```cpp
-#define WIFI_SSID "MyWiFiNetwork"
-#define WIFI_PASS "MyWiFiPassword"
-#define MQTT_SERVER "192.168.1.100"  // Your HA IP
+#define WIFI_SSID "your-wifi"
+#define WIFI_PASS "your-password"
+#define MQTT_SERVER "192.168.1.100"
 ```
 
-### Build and flash
+## Step 1: Collect training data
+
+Set the mode in `config.h`:
+
+```cpp
+#define DEFAULT_MODE MODE_COLLECT
+```
+
+Flash and open the web UI:
+
+```bash
+pio run -t upload
+pio device monitor
+```
+
+Serial output will show the device IP. Open `http://<ip>/` in a browser.
+
+You'll see a live camera feed. Use the buttons (or press G/B on keyboard) to label frames:
+- **Good** — sit with proper posture
+- **Bad** — slouch, lean, hunch over, etc.
+
+Collect at least 200 images per class. More variety = better model. Move around, change lighting, wear different clothes.
+
+Save the labeled images into `scripts/data/good/` and `scripts/data/bad/`.
+
+## Step 2: Train the model
+
+```bash
+cd scripts
+pip install -r requirements.txt
+python train_model.py --data ./data --output ../src/model.h
+```
+
+This trains a small CNN and converts it to a C header. Takes a few minutes depending on your machine.
+
+If accuracy is below 80%, try:
+- More training data
+- Transfer learning: `python train_model.py --data ./data --output ../src/model.h --transfer`
+- More epochs: `--epochs 50`
+
+## Step 3: Monitor
+
+Switch mode back in `config.h`:
+
+```cpp
+#define DEFAULT_MODE MODE_MONITOR
+```
+
+Flash:
 
 ```bash
 pio run -t upload
 ```
 
-If upload fails, hold BOOT button while connecting USB.
-
-### Monitor
+After the first flash, you can update over WiFi:
 
 ```bash
-pio device monitor -b 115200
-```
-
-Output should look like:
-
-```
-PosturePilot Starting...
-Camera initialized
-Connecting to MyWiFiNetwork...
-Connected! IP: 192.168.1.50
-MQTT connected!
-Calibrating... sit with good posture
-Calibration complete!
-Monitoring...
+pio run -t upload --upload-port posture-pilot.local
 ```
 
 ## Home Assistant
@@ -97,59 +124,35 @@ mqtt:
     - name: "Posture Status"
       state_topic: "posture-pilot/status"
       icon: mdi:human-handsup
-      
+
     - name: "Posture Level"
       state_topic: "posture-pilot/level"
       icon: mdi:alert-circle
-      
+
     - name: "Posture Streak"
       state_topic: "posture-pilot/streak"
       unit_of_measurement: "hours"
       icon: mdi:trophy
-
-  button:
-    - name: "Recalibrate Posture"
-      command_topic: "posture-pilot/calibrate"
-      payload_press: "1"
 ```
 
-### Automations
-
-Copy from `ha-config/automations.yaml` or create manually in the UI.
-
-## Calibration
-
-1. Sit properly - back straight, shoulders relaxed
-2. Face the camera
-3. Wait 5 seconds - LED blinks during calibration
-4. Done - LED goes solid
-
-To recalibrate: press button in HA or restart device.
+Copy automations from `ha-config/automations.yaml` or set them up in the UI.
 
 ## Troubleshooting
 
-**Camera init failed**
-- Check camera module is attached firmly
-- Power cycle the device
+**Camera init failed** — Check the camera module is seated properly. Power cycle.
 
-**WiFi connection failed**
-- Must be 2.4GHz (ESP32 doesn't do 5GHz)
-- Check credentials
+**WiFi won't connect** — ESP32 only does 2.4GHz, not 5GHz.
 
-**MQTT connection failed**
-- Verify broker IP
-- Check port 1883 isn't blocked
+**Model won't load** — Check serial output. If arena is too small, increase `TENSOR_ARENA_SIZE` in config.h.
 
-**False positives**
-- Recalibrate
-- Increase SLOUCH_THRESHOLD in config.h
-- Check for shadows on your face
+**Bad accuracy** — More data, better variety, or try `--transfer` mode.
+
+**MQTT not connecting** — Check broker IP and port 1883.
 
 ## LED patterns
 
 | Pattern | Meaning |
 |---------|---------|
-| Slow blink | Calibrating |
-| Solid | Ready, good posture |
-| Fast blink | Slouching |
-| Off | Error |
+| Blinking | Starting up |
+| Quick flash pattern | Escalation level change (flashes = level) |
+| Off | Normal operation |

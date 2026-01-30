@@ -23,3 +23,11 @@ src/config.h
 # Temp
 *.log
 *.tmp
+
+# Training data (too large for git)
+data/
+scripts/__pycache__/
+
+# Python
+*.pyc
+scripts/venv/
