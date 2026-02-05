@@ -269,24 +269,42 @@ void publishState() {
 // ============================================
 // Escalation Logic
 // ============================================
+/**
+ * Update escalation level based on how long the user has been slouching.
+ * 
+ * Escalation timeline (configurable in config.h):
+ *   0-30s:   LEVEL_GOOD (no warning)
+ *   30s-2m:  LEVEL_WARNING (gentle reminder)
+ *   2m-5m:   LEVEL_SERIOUS (getting annoying)
+ *   5m-10m:  LEVEL_AGGRESSIVE (very annoying)
+ *   10m+:    LEVEL_AIRHORN (nuclear option)
+ * 
+ * When posture improves, immediately resets to LEVEL_GOOD and starts
+ * tracking a "good posture streak" (published to MQTT in hours).
+ * 
+ * On level changes, publishes MQTT update and flashes LED (# of flashes = level).
+ */
 void updateEscalationLevel() {
     if (!state.isSlouching) {
+        // Good posture detected — reset escalation
         state.currentLevel = LEVEL_GOOD;
         state.slouchStartTime = 0;
 
+        // Track good posture streak (for MQTT streak sensor)
         if (state.goodPostureTime == 0) {
             state.goodPostureTime = millis();
         }
 
         unsigned long goodDuration = (millis() - state.goodPostureTime) / 1000;
-        state.streak = goodDuration / 3600;
+        state.streak = goodDuration / 3600;  // Convert to hours
 
         return;
     }
 
-    // Slouching detected
+    // Slouching detected — escalate over time
     state.goodPostureTime = 0;
 
+    // Start timer on first slouch detection
     if (state.slouchStartTime == 0) {
         state.slouchStartTime = millis();
     }
@@ -295,6 +313,7 @@ void updateEscalationLevel() {
 
     PostureLevel previousLevel = state.currentLevel;
 
+    // Determine escalation level based on duration
     if (slouchDuration >= LEVEL4_SECONDS) {
         state.currentLevel = LEVEL_AIRHORN;
     } else if (slouchDuration >= LEVEL3_SECONDS) {
@@ -305,13 +324,14 @@ void updateEscalationLevel() {
         state.currentLevel = LEVEL_WARNING;
     }
 
-    // Publish immediately on level change
+    // Publish immediately on level change (not just on periodic interval)
     if (state.currentLevel != previousLevel) {
         Serial.printf("ESCALATION: Level %d -> %d (slouching %lu seconds)\n",
                       previousLevel, state.currentLevel, slouchDuration);
         publishState();
 
-        // Flash LED on escalation (flashes = level)
+        // Visual feedback: flash LED N times where N = escalation level
+        // (e.g., LEVEL_AIRHORN = 4 flashes)
         for (int i = 0; i <= state.currentLevel; i++) {
             digitalWrite(LED_GPIO_NUM, HIGH);
             delay(100);
