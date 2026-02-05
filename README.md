@@ -30,13 +30,31 @@ I slouch constantly. Ergonomic chairs don't help. Those posture reminder apps? I
 
 What I needed was something that *escalates* — starts polite but eventually resorts to an airhorn if I keep ignoring it.
 
-## How it works
+## 🔄 How It Works
 
-1. **Collect** — Flash in collect mode, open the web UI, label ~200 images of good and bad posture
-2. **Train** — Run the training script to build a TFLite model from your data
-3. **Monitor** — Flash with the trained model, it classifies your posture in real-time and escalates if you slouch
+```mermaid
+graph LR
+    A[1. Data Collection] --> B[2. Model Training]
+    B --> C[3. Deployment]
+    C --> D[4. Real-time Monitoring]
+    D --> E[5. Home Assistant]
+    
+    A -->|Web UI| A1[Label 200+ images<br/>good/bad posture]
+    B -->|Python script| B1[Train CNN<br/>INT8 quantization]
+    C -->|Flash firmware| C1[Upload to ESP32]
+    D -->|TFLite inference| D1[Classify posture<br/>~200ms/frame]
+    E -->|MQTT| E1[Automations<br/>Notifications]
+```
 
-The model runs entirely on the ESP32-S3 using TFLite Micro. No cloud, no latency, no privacy concerns.
+**Workflow:**
+
+1. **📸 Collect** — Flash in COLLECT mode, open web UI, label 200+ images of good/bad posture
+2. **🧠 Train** — Run training script to build INT8 quantized TFLite model from your data
+3. **📤 Deploy** — Flash firmware with trained model embedded as C header
+4. **👁️ Monitor** — Real-time posture classification at 5fps with progressive escalation
+5. **🏠 Integrate** — MQTT publishes to Home Assistant for automations and tracking
+
+The model runs **entirely on the ESP32-S3** using TFLite Micro. No cloud, no latency, no privacy concerns.
 
 ## Hardware
 
