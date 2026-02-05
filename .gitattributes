@@ -1,0 +1,35 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Source code
+*.cpp text diff=cpp
+*.h text diff=cpp
+*.c text diff=cpp
+*.py text diff=python
+*.ini text
+*.yaml text
+*.yml text
+*.json text
+*.md text
+
+# Binaries
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.tflite binary
+*.bin binary
+*.elf binary
+
+# Archives
+*.zip binary
+*.tar binary
+*.gz binary
+
+# Exclude from exports
+.gitattributes export-ignore
+.gitignore export-ignore
+.github export-ignore
+
+# Mark vendored dependencies
+.pio/* linguist-vendored
