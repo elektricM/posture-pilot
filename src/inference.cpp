@@ -11,17 +11,21 @@ bool inferenceSetup() {
     // Check if model data is valid (not just the placeholder 0x00)
     if (posture_model_len <= 1) {
         Serial.println("No trained model found - flash a model or use COLLECT mode");
+        Serial.println("To train: cd scripts && python train_model.py --data ./data");
         return false;
     }
 
+    Serial.printf("Loading TFLite model (%u bytes)...\n", posture_model_len);
+    
     bool ok = ModelInit(posture_model, tensorArena, TENSOR_ARENA_SIZE);
 
     if (!ok) {
         Serial.println("Failed to initialize TFLite model");
+        Serial.printf("Tensor arena size: %d bytes (increase if needed)\n", TENSOR_ARENA_SIZE);
         return false;
     }
 
-    Serial.println("TFLite model loaded");
+    Serial.println("TFLite model loaded successfully");
     ModelPrintInputTensorDimensions();
     ModelPrintOutputTensorDimensions();
     ModelPrintTensorQuantizationParams();

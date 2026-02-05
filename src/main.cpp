@@ -159,6 +159,9 @@ bool setupCamera() {
 // ============================================
 void setupWiFi() {
     Serial.printf("Connecting to %s", WIFI_SSID);
+    
+    // Set WiFi mode to station (client)
+    WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 
     int attempts = 0;
@@ -170,8 +173,11 @@ void setupWiFi() {
 
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("\nConnected! IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("Signal strength: %d dBm\n", WiFi.RSSI());
     } else {
         Serial.println("\nWiFi connection failed!");
+        Serial.println("Check SSID/password in config.h");
+        Serial.println("Note: ESP32 only supports 2.4GHz WiFi");
     }
 }
 
@@ -355,8 +361,19 @@ void processFrame() {
         InferenceResult result = runInference(fb);
         state.confidence = result.confidence;
         state.isSlouching = result.isBadPosture;
+        
+        #if DEBUG_MODE
+        // Print inference stats every 10 frames to avoid log spam
+        static int frameCount = 0;
+        if (++frameCount >= 10) {
+            Serial.printf("Inference: conf=%.2f, slouch=%d, time=%lums\n",
+                          result.confidence, result.isBadPosture, result.inferenceTimeMs);
+            frameCount = 0;
+        }
+        #endif
     } else {
         // No model loaded - default to good posture
+        // This allows testing without a trained model
         state.confidence = 0.0f;
         state.isSlouching = false;
     }
